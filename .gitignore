@@ -1,0 +1,16 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OCR output
+OCR_Result.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+#OCR input text Images
+Text_Images/
