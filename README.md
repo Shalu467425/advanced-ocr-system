@@ -121,20 +121,17 @@ a structured OCR pipeline using computer vision and OCR techniques.
 
 ## 🛠️ Requirements
 
--   Python 3.11
--   Tesseract OCR (installed separately)
-
-``` txt
-numpy
-opencv-python
-pillow
-pytesseract
-rich
-img2table
-re
-os
-tempfile
-```
+- Python **3.11**
+- Tesseract OCR (installed separately)
+- Python libraries:
+  ```txt
+  numpy
+  opencv-python
+  pillow
+  pytesseract
+  rich
+  img2table
+  ```
 
 ------------------------------------------------------------------------
 
