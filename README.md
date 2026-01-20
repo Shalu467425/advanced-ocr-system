@@ -163,9 +163,9 @@ python main.py
 
 ## 👤 Authors
 
--   Muhammad Inshal Saqib Siddiqui\
--   Muhammad Hamza Latif Khan\
--   Muhammad Abdullah Sohail\
+-   Muhammad Inshal Saqib Siddiqui
+-   Muhammad Hamza Latif Khan
+-   Muhammad Abdullah Sohail
 -   Marwan Ali
 
 ------------------------------------------------------------------------
