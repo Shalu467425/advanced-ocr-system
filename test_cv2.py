@@ -38,32 +38,35 @@ def ocr_preprocess(image):
     return thresh
 
 
-
-
 def show_preprocessed_image(cv2_img, title="Preprocessed Image"):
-    
+    """
+    Displays the final preprocessed image to the user.
+    Works reliably on Windows.
+    """
     if not isinstance(cv2_img, np.ndarray):
         return
 
-    # Handle grayscale vs BGR correctly
-    if len(cv2_img.shape) == 2:  # Grayscale / thresholded
+    # Handle both grayscale and color images
+    if len(cv2_img.shape) == 2:
+        # Grayscale image
         pil_img = Image.fromarray(cv2_img)
-    else:  # BGR image
+    else:
+        # Convert BGR → RGB
         rgb = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb)
 
+    # Save temp image so OS viewer opens it
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     pil_img.save(tmp.name)
     tmp.close()
 
+    # Open with default image viewer
     os.startfile(tmp.name)
 
-# =========================================================
 # IMG2TABLE TABLE EXTRACTOR
-# =========================================================
 
 class Img2TableExtractor:
-    def __init__(self, language="eng"):
+    def _init_(self, language="eng"):
         self.language = language
         self.ocr_backend = TesseractOCR(lang=language)
 
@@ -97,91 +100,8 @@ class Img2TableExtractor:
         table = tables[0].df.fillna("").values.tolist()
         return table
 
-
-# =========================================================
-# Keep all your existing classes:
-# SmartOrientationCorrector, ImprovedHandwrittenOCR, TextExtractor, ContentDetector
-# =========================================================
-
-# Example: replacing FixedMixedContentHandler's table part
-class FixedMixedContentHandler:
-    def __init__(self, image, language="eng"):
-        if isinstance(image, str):
-            self.image = cv2.imread(image)
-        else:
-            self.image = image.copy()
-        self.language = language
-    
-    def detect_table_region(self):
-        gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150)
-
-        # Detect lines
-        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 1))
-        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 50))
-        h_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, h_kernel, iterations=2)
-        v_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, v_kernel, iterations=2)
-        table_mask = cv2.add(h_lines, v_lines)
-        table_mask = cv2.dilate(table_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (3,3)), iterations=2)
-
-        # Count how many pixels are part of lines
-        line_density = np.sum(table_mask > 0) / (self.image.shape[0]*self.image.shape[1])
-        if line_density < 0.005:  # skip if <0.5% pixels are lines
-            return None
-
-        # Contour detection
-        contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None
-
-        largest_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour)
-        area = w*h
-        img_area = self.image.shape[0]*self.image.shape[1]
-
-        # Require both size and line density
-        if area > img_area*0.05 and line_density > 0.01:
-            return {'x': x, 'y': y, 'w': w, 'h': h}
-
-        return None
-
-    
-    def extract_mixed(self, num_columns=None):
-        result = {'text_above': None, 'table': None, 'text_below': None, 'full_text': None}
-        table_region = self.detect_table_region()
-        
-        if table_region:
-            x, y, w, h = table_region['x'], table_region['y'], table_region['w'], table_region['h']
-            padding = 10
-            y_start = max(0, y-padding)
-            y_end = min(self.image.shape[0], y+h+padding)
-            table_img = self.image[y_start:y_end, x:x+w]
-            
-            # Run Img2Table extractor
-            table = Img2TableExtractor(self.language).extract(table_img)
-            if table:
-                result['table'] = table
-            
-            # Text above
-            if y_start>10:
-                text_above_img = self.image[0:y_start, :]
-                result['text_above'] = TextExtractor(text_above_img, self.language).extract()
-            
-            # Text below
-            if y_end < self.image.shape[0]-10:
-                text_below_img = self.image[y_end:, :]
-                result['text_below'] = TextExtractor(text_below_img, self.language).extract()
-        else:
-            # No table region → treat as pure text
-            result['text_above'] = TextExtractor(self.image, self.language).extract()
-        
-        # Full text
-        result['full_text'] = TextExtractor(self.image, self.language).extract()
-        return result
-
-# =========================================================
 # SMART ORIENTATION CORRECTOR
-# =========================================================
+
 class SmartOrientationCorrector:
     COMMON_WORDS = {
         'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
@@ -235,18 +155,21 @@ class SmartOrientationCorrector:
         console.print(f"[green]✓ Selected: {best_angle}° (score: {best_score})[/green]")
         return best_img, best_angle
 
+
 class ImprovedHandwrittenOCR:
-    def __init__(self, image, language="eng"):
+    def _init_(self, image, language="eng"):
         if isinstance(image, str):
             self.image = cv2.imread(image)
         else:
             self.image = image.copy()
         self.language = language
+        self.preprocessed_img = None
     
     def extract(self):
         console.print("[cyan]Processing handwritten text...[/cyan]")
 
         results = []
+        preprocessed_images = []
 
         # -------------------------------
         # Method 1: Reliable 2x upscale
@@ -260,11 +183,11 @@ class ImprovedHandwrittenOCR:
         )
         text1 = pytesseract.image_to_string(thresh1, lang=self.language, config='--oem 1 --psm 6')
         results.append(text1.strip())
+        preprocessed_images.append(thresh1)
         console.print(f"[dim]Method 1: {len(text1.strip())} chars[/dim]")
 
-        # -------------------------------
         # Method 2: 3x upscale + contrast
-        # -------------------------------
+
         img2 = cv2.resize(self.image, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
         gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.GaussianBlur(gray2, (3, 3), 0)
@@ -275,31 +198,35 @@ class ImprovedHandwrittenOCR:
         )
         text2 = pytesseract.image_to_string(thresh2, lang=self.language, config='--oem 1 --psm 6')
         results.append(text2.strip())
+        preprocessed_images.append(thresh2)
         console.print(f"[dim]Method 2: {len(text2.strip())} chars[/dim]")
 
-        # -------------------------------
         # Pick the longest text (most characters)
-        # -------------------------------
-        best = max(results, key=lambda x: len(x))
-        console.print(f"[green]✓ Best result: {len(best)} characters[/green]")
+     
+        best_idx = max(range(len(results)), key=lambda i: len(results[i]))
+        best = results[best_idx]
+        self.preprocessed_img = preprocessed_images[best_idx]
+        console.print(f"[green]✓ Best result: {len(best)} characters (Method {best_idx + 1})[/green]")
 
         return best
 
+# FixedTableExtractor
 
-
-# -----------------------------
-# FixedTableExtractor (reuse your previous one)
-# -----------------------------
 class FixedTableExtractor:
-    def __init__(self, image):
+    def _init_(self, image):
         if isinstance(image, str):
             self.image = cv2.imread(image)
         else:
             self.image = image.copy()
+        self.preprocessed_img = None
 
     def extract(self, num_columns=None):
         """OCR-only table extraction using y-coordinate clustering (borderless safe)"""
         gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+        
+        # Store preprocessed version
+        self.preprocessed_img = ocr_preprocess(self.image)
+        
         data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT, config='--oem 3 --psm 6')
 
         words = []
@@ -336,18 +263,16 @@ class FixedTableExtractor:
             table.append(row_data)
         return table
 
-
-
-# =========================================================
 # TEXT EXTRACTOR
-# =========================================================
+
 class TextExtractor:
-    def __init__(self, image, language="eng"):
+    def _init_(self, image, language="eng"):
         if isinstance(image, str):
             self.image = cv2.imread(image)
         else:
             self.image = image.copy()
         self.language = language
+        self.preprocessed_img = None
     
     def extract(self):
         img = cv2.resize(self.image, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
@@ -358,134 +283,97 @@ class TextExtractor:
             cv2.THRESH_BINARY, 31, 11
         )
         
+        # Store preprocessed version
+        self.preprocessed_img = thresh
+        
         text = pytesseract.image_to_string(thresh, lang=self.language, config='--oem 3 --psm 6')
         return text.strip()
-    
 
-    
-
-# =========================================================
 # FIXED MIXED CONTENT HANDLER
-# =========================================================
+
 class FixedMixedContentHandler:
-    def __init__(self, image, language="eng"):
+    def _init_(self, image, language="eng"):
         if isinstance(image, str):
             self.image = cv2.imread(image)
         else:
             self.image = image.copy()
         self.language = language
+        self.preprocessed_img = None
     
     def detect_table_region(self):
-        """Improved table region detection"""
-        console.print("[cyan]Detecting table region...[/cyan]")
-        
         gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, 50, 150)
-        
+
         # Detect lines
         h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 1))
         v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 50))
-        
         h_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, h_kernel, iterations=2)
         v_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, v_kernel, iterations=2)
-        
-        # Combine
         table_mask = cv2.add(h_lines, v_lines)
-        
-        # Dilate to connect
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        table_mask = cv2.dilate(table_mask, kernel, iterations=2)
-        
-        # Find contours
-        contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if not contours:
-            console.print("[yellow]No table region found (trying full image as table)[/yellow]")
+        table_mask = cv2.dilate(table_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (3,3)), iterations=2)
+
+        # Count how many pixels are part of lines
+        line_density = np.sum(table_mask > 0) / (self.image.shape[0]*self.image.shape[1])
+        if line_density < 0.005:
             return None
-        
-        # Find largest region
+
+        # Contour detection
+        contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
         largest_contour = max(contours, key=cv2.contourArea)
         x, y, w, h = cv2.boundingRect(largest_contour)
-        
-        area = w * h
-        img_area = self.image.shape[0] * self.image.shape[1]
-        
-        # Must be at least 5% of image
-        if area > img_area * 0.05:
-            console.print(f"[green]✓ Table region: {w}×{h} at ({x},{y}) - {area/img_area*100:.1f}% of image[/green]")
+        area = w*h
+        img_area = self.image.shape[0]*self.image.shape[1]
+
+        # Require both size and line density
+        if area > img_area*0.05 and line_density > 0.01:
             return {'x': x, 'y': y, 'w': w, 'h': h}
-        
-        console.print("[yellow]No significant table region found[/yellow]")
+
         return None
+
     
     def extract_mixed(self, num_columns=None):
-        console.print("[bold cyan]═══ MIXED CONTENT EXTRACTION ═══[/bold cyan]")
-
-        result = {
-            'text_above': None,
-            'table': None,
-            'text_below': None,
-            'full_text': None
-        }
-
-        # Try to detect table region first
+        result = {'text_above': None, 'table': None, 'text_below': None, 'full_text': None}
         table_region = self.detect_table_region()
-
+        
+        # Store preprocessed version of full image
+        self.preprocessed_img = ocr_preprocess(self.image)
+        
         if table_region:
             x, y, w, h = table_region['x'], table_region['y'], table_region['w'], table_region['h']
-
-            # Extract table region
             padding = 10
-            y_start = max(0, y - padding)
-            y_end = min(self.image.shape[0], y + h + padding)
-            x_start = max(0, x - padding)
-            x_end = min(self.image.shape[1], x + w + padding)
-
-            table_img = self.image[y_start:y_end, x_start:x_end]
-            cv2.imwrite("debug_edges.png", cv2.Canny(
-                cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY),
-                50, 150
-            ))
-
+            y_start = max(0, y-padding)
+            y_end = min(self.image.shape[0], y+h+padding)
+            table_img = self.image[y_start:y_end, x:x+w]
             
-
-            # Run TabularOCR
-            table = FixedTableExtractor(table_img).extract(num_columns)
-
+            # Run Img2Table extractor
+            table = Img2TableExtractor(self.language).extract(table_img)
             if table:
                 result['table'] = table
-            else:
-                console.print("[yellow]⚠ Region rejected as table, treating as text[/yellow]")
-                result['text_above'] = TextExtractor(self.image, self.language).extract()
-                result['table'] = None
-
-
-
-            # Extract text above the table
-            if y_start > 10:
+            
+            # Text above
+            if y_start>10:
                 text_above_img = self.image[0:y_start, :]
                 result['text_above'] = TextExtractor(text_above_img, self.language).extract()
-
-            # Extract text below the table
-            if y_end < self.image.shape[0] - 10:
+            
+            # Text below
+            if y_end < self.image.shape[0]-10:
                 text_below_img = self.image[y_end:, :]
                 result['text_below'] = TextExtractor(text_below_img, self.language).extract()
-
         else:
-            console.print("[yellow]⚠ No confident table region → treating image as pure text[/yellow]")
-            result['table'] = None
+            # No table region → treat as pure text
             result['text_above'] = TextExtractor(self.image, self.language).extract()
-
-
-        # Always get full text for reference
+        
+        # Full text
         result['full_text'] = TextExtractor(self.image, self.language).extract()
-
         return result
 
 
-# =========================================================
 # CONTENT DETECTOR
-# =========================================================
+
+
 class ContentDetector:
     @staticmethod
     def detect(image):
@@ -512,15 +400,13 @@ class ContentDetector:
             return "table"
         return "text"
 
-
-
-# =========================================================
 # MAIN PROCESSOR
-# =========================================================
+
 class OCRProcessor:
-    def __init__(self, image_path, language="eng"):
+    def _init_(self, image_path, language="eng"):
         self.image_path = image_path
         self.language = language
+        self.final_preprocessed_img = None
     
     def process(self, mode="auto", num_columns=None, fix_orientation=True, save_comparison=False):
         img_original = cv2.imread(self.image_path)
@@ -537,7 +423,6 @@ class OCRProcessor:
         if fix_orientation:
             console.print("[bold cyan]═══ ORIENTATION CHECK ═══[/bold cyan]")
             img, angle = SmartOrientationCorrector.fix(img, self.language)
-            self.final_preprocessed_img = ocr_preprocess(img)            
             if save_comparison and angle != 0:
                 cv2.imwrite("corrected_orientation.png", img)
                 console.print("[dim]Saved: corrected_orientation.png[/dim]")
@@ -550,29 +435,32 @@ class OCRProcessor:
         result = {'mode': mode, 'text': None, 'table': None, 'text_above': None, 'text_below': None}
         
         if mode == "handwritten":
-            hw = ImprovedHandwrittenOCR(img)
+            hw = ImprovedHandwrittenOCR(img, self.language)
             result['text'] = hw.extract()
+            self.final_preprocessed_img = hw.preprocessed_img
             
         elif mode == "mixed":
             handler = FixedMixedContentHandler(img, self.language)
             mixed = handler.extract_mixed(num_columns)
             result.update(mixed)
+            self.final_preprocessed_img = handler.preprocessed_img
             
         elif mode == "table":
             extractor = FixedTableExtractor(img)
             result['table'] = extractor.extract(num_columns)
             txt_ext = TextExtractor(img, self.language)
             result['text'] = txt_ext.extract()
+            self.final_preprocessed_img = extractor.preprocessed_img
             
         else:  # text
             txt_ext = TextExtractor(img, self.language)
             result['text'] = txt_ext.extract()
+            self.final_preprocessed_img = txt_ext.preprocessed_img
         
         return result
 
-# =========================================================
 # APP
-# =========================================================
+
 class OCRApp:
     LANGUAGES = {
         "1": ("English", "eng"),
@@ -590,7 +478,8 @@ class OCRApp:
             "✓ Auto column detection (dual method)\n"
             "✓ Fixed mixed content (better detection)\n"
             "✓ Comparison images (see original)\n"
-            "✓ Multi-language support",
+            "✓ Multi-language support\n"
+            "✓ Preprocessed image display",
             expand=False
         ))
         
@@ -598,10 +487,9 @@ class OCRApp:
             path = Prompt.ask("\nImage path").strip('"')
             if os.path.exists(path):
                 console.print("[green]✓ Opening image...[/green]")
-                os.startfile(path)   # 👈 opens the image
+                os.startfile(path)
                 break
             console.print("[red]File not found[/red]")
-
         
         console.print("\n[bold]Languages:[/bold]")
         for k, (name, _) in self.LANGUAGES.items():
@@ -638,12 +526,7 @@ class OCRApp:
                 num_columns=num_cols, 
                 fix_orientation=fix_orient,
                 save_comparison=save_comparison
-                # Show final preprocessed image (what OCR actually saw)
             )
-
-        if hasattr(processor, "final_preprocessed_img"):
-            show_preprocessed_image(processor.final_preprocessed_img)
-
         
         console.print()
         
@@ -721,10 +604,16 @@ class OCRApp:
             if mode == "mixed":
                 console.print("  • debug_table_region.png - Detected table region")
         
+        # Show final preprocessed image (what OCR actually saw)
+        if hasattr(processor, "final_preprocessed_img") and processor.final_preprocessed_img is not None:
+            console.print("\n[bold green]Opening preprocessed image (what OCR actually read)...[/bold green]")
+            show_preprocessed_image(processor.final_preprocessed_img, "Final Preprocessed Image")
+        
         if saved:
             os.startfile(saved[0])
 
-if __name__ == "__main__":
+
+if __name__ == "_main_":
     try:
         app = OCRApp()
         app.run()

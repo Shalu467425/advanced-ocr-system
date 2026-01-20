@@ -3,3 +3,4 @@ opencv-python==4.8.1.78
 pillow==10.2.0
 pytesseract
 rich
+img2table
