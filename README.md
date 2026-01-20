@@ -139,6 +139,9 @@ These images help in **visual verification and debugging**, especially useful fo
   pytesseract
   rich
   img2table
+  re
+  os
+  tempfile
   ```
 
 ---
