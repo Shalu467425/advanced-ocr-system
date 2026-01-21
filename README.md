@@ -131,6 +131,9 @@ a structured OCR pipeline using computer vision and OCR techniques.
   pytesseract
   rich
   img2table
+  os
+  re
+  tempfile
   ```
 
 ------------------------------------------------------------------------
